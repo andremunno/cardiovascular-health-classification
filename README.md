@@ -1,73 +1,159 @@
-# EPFL Machine Learning Project 1
+# Cardiovascular Health Classification
 
-Prediction of myocardial infarction or coronary heart disease (MICHD) from the
-BRFSS 2015 survey. Only Python 3 and NumPy are needed.
+A reproducible machine learning pipeline for classifying self-reported myocardial infarction or coronary heart disease (**MICHD**) from **BRFSS 2015** survey responses.
 
-## Team
-- Andrea Munno
-- Lorenzo Redighieri
-- Andreas Caeyman
+Models and preprocessing are implemented with **NumPy**, including survey-code decoding, categorical encoding, missingness indicators, logistic regression and stratified cross-validation.
 
-## Data
+## Results
 
-The dataset is not in the repository. Put the three CSV files directly in `data/raw/`:
+The final model achieves **F1 0.430 ± 0.004** in stratified five-fold cross-validation and **0.444** on the final AIcrowd submission.
+
+| Model | CV F1, mean ± std | Mean ROC AUC |
+| --- | ---: | ---: |
+| **Logistic regression — mini-batch SGD, final** | **0.430 ± 0.004** | **0.861** |
+| Logistic regression — full-batch GD | 0.430 ± 0.004 | 0.861 |
+| Linear SVM — class-weighted | 0.427 ± 0.004 | 0.860 |
+| Ridge regression | 0.419 ± 0.003 | 0.854 |
+| Always-negative baseline | 0.000 ± 0.000 | 0.500 |
+
+The positive class accounts for **8.83%** of training observations, so positive-class F1 is the primary metric. For the final logistic model, optimizing the threshold on training predictions raises held-out CV F1 from **0.241** at threshold 0.5 to **0.430**. Scores and AUC remain unchanged.
+
+Interaction and alternative-recoding variants reach approximately **0.432** CV F1. Their gains are small and vary across folds; the final pipeline retains the simpler feature representation.
+
+## Quick start
+
+### 1. Install dependencies
+
+Training, inference and the repository tests require **Python 3 and NumPy**:
+
+```sh
+python -m pip install numpy
+```
+
+The exploratory notebook additionally requires Matplotlib and a Jupyter environment.
+
+### 2. Add the data
+
+Use the three CSV files supplied for the course competition. The raw dataset is not included in the repository.
 
 ```text
 data/
-  raw/        x_train.csv, y_train.csv, x_test.csv
-  metadata/   variables_BRFSS_2015.csv   (in the repository)
+  raw/
+    x_train.csv
+    y_train.csv
+    x_test.csv
+  metadata/
+    variables_BRFSS_2015.csv
 ```
 
-The first run caches the CSVs in `data/raw/cache.npz` (about 100 s).
-If the run is interrupted during this step, delete `cache.npz` and start again.
+The provided split contains **328,135 labelled training observations**, **109,379 unlabelled test observations** and **321 original features**.
 
-## Usage
+The first run creates `data/raw/cache.npz` to speed up subsequent loads. Delete this cache if you replace the input CSV files or interrupt cache creation.
+
+### 3. Train and generate predictions
+
+Run from the repository root:
 
 ```sh
-python run.py              # final model -> data/submissions/submission.csv
-python cv_experiments.py   # all cross-validation experiments of the report (~1.5 h)
-python -m unittest discover -s tests
+python run.py
 ```
 
-## Structure
+This fits preprocessing and the final model on all labelled observations and writes:
 
-| File | Content |
+```text
+data/submissions/submission.csv
+```
+
+The CSV preserves the test IDs and returns labels in `{-1, 1}`.
+
+## Pipeline
+
+1. **Select features:** compare five cumulative relevance groups and exclude target-revealing variables, administrative fields and alternative recodings by default.
+2. **Clean survey codes:** distinguish missing answers from genuine zeros and apply variable-specific recodings and scale factors.
+3. **Decode structured values:** convert coded frequencies, durations and dates; preserve special responses through separate indicators.
+4. **Encode and impute:** encode binary and nominal categories, pool categories observed fewer than 50 times, median-impute numerical variables and add missingness indicators.
+5. **Standardize:** center and scale every encoded column, including binary indicators.
+6. **Fit and classify:** train logistic regression and select a decision threshold maximizing training F1.
+
+During cross-validation, preprocessing statistics, interaction choices, model parameters and thresholds are fitted exclusively on the training portion of each fold and then applied to the held-out observations.
+
+## Final model configuration
+
+| Setting | Value |
 | --- | --- |
-| `implementations.py` | The six required methods |
-| `run.py` | Trains the final model and writes the submission |
-| `cv_experiments.py` | 5-fold CV: feature groups, threshold, lambda, interactions, baselines |
-| `helpers.py` | Course helpers (`load_csv_data`, `create_csv_submission`) |
-| `src/preprocessing.py` | Data loading, feature selection, full pipeline |
-| `src/missing.py` | Metadata cleaning and median imputation |
-| `src/brfss.py` | BRFSS storage formats (prefix codes, dates, special answers) |
-| `src/encoding.py` | Binary / one-hot / numeric encoding |
-| `src/logistic.py` | Logistic regression with mini-batch SGD (final model) |
-| `src/svm.py` | Linear SVM (baseline) |
-| `src/metrics.py` | F1, accuracy, best threshold, AUC |
-| `src/validation.py` | Stratified k-fold cross-validation |
-| `data/metadata/variables_BRFSS_2015.csv` | Per-variable type, missing/zero codes, recodings, group and use |
+| Features | Cumulative groups 1–5; 691 encoded columns when fitted on all training observations |
+| Model | Logistic regression |
+| Optimizer | Mini-batch stochastic gradient descent |
+| Epochs | 30 |
+| Batch size | 256 |
+| Learning rate | `0.05 / sqrt(epoch + 1)` |
+| L2 penalty | `lambda = 0`; experiments use the convention `lambda * ||w||²` |
+| Initialization | Zero coefficients and intercept |
+| Random seed | 38 |
+| Decision threshold | Recomputed to maximize training F1; approximately 0.208 in the final run |
 
-## Preprocessing
+## Reproduce the experiments
 
-```
-select_features -> clean -> decode -> encode -> standardize
+```sh
+python cv_experiments.py
 ```
 
-1. **select_features**: variables with `use == include` and `group <= max_group` (groups 1 to 5).
-2. **clean**: per variable, from the metadata: `na_values` to NaN, `zero_values` to 0, `recode`, `scale`.
-3. **decode**: prefix-coded frequencies and durations to one unit, MMYYYY dates to a month index,
-   special answers (e.g. `LASTSMK2 = 8`, never smoked regularly) to a separate 0/1 flag.
-4. **encode**: binary variables to one 0/1 column; nominal variables to one-hot without the most
-   frequent level, rare levels (< 50 in training) pooled in `__other`; ordinal and numeric variables
-   median-imputed; a `__missing` flag for every column with missing values.
-5. **standardize**: every encoded column to mean 0 and standard deviation 1.
+The script runs stratified five-fold CV for cumulative feature groups, regularization strengths, threshold selection, interaction terms, squared age, alternative recodings and baseline models. Summaries are written to:
 
-Everything learned from data (levels, medians, means, standard deviations) is fitted on the
-training rows only, with `fit_preprocess`, and applied to any rows with `apply_preprocess`.
-In cross-validation this happens inside each fold.
+```text
+experiments/results/cv_results.json
+```
 
-## Final model
+The complete experiment suite can take around 1.5 hours, depending on the machine.
 
-Feature groups 1-5 (about 690 encoded columns), logistic regression trained with mini-batch SGD
-(batch 256, 30 epochs, learning rate 0.05 / sqrt(epoch + 1), lambda = 0), decision threshold
-that maximizes F1 on the training predictions. 5-fold CV: F1 0.430 ± 0.004, AUC 0.861.
+## Tests
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The repository contains 13 tests covering survey-code cleaning and decoding, encoding, metrics, fold construction, threshold isolation, logistic optimization and the linear SVM.
+
+## Repository structure
+
+```text
+implementations.py    Six required regression and optimization methods
+run.py                Final training and submission generation
+cv_experiments.py     Cross-validation experiments and baselines
+helpers.py            Dataset loading and submission utilities
+src/
+  preprocessing.py    Feature selection and fitted preprocessing pipeline
+  missing.py          Survey-code cleaning and median imputation
+  brfss.py            BRFSS-specific decoding
+  encoding.py         Categorical and numerical feature encoding
+  logistic.py         Mini-batch logistic regression
+  svm.py              Class-weighted linear SVM
+  validation.py       Stratified folds and fold evaluation
+  metrics.py          F1, accuracy, threshold selection and ROC AUC
+  config.py           Paths and reproducibility settings
+notebooks/            Exploratory data analysis
+tests/                Repository tests
+data/metadata/        Variable definitions and preprocessing rules
+```
+
+## Scope and limitations
+
+The target is a **previously reported diagnosis**, rather than future disease onset. The data are self-reported and cross-sectional, so associations may reflect confounding or consequences of disease. Feature relevance groups encode prior judgments.
+
+Thresholds are selected on in-sample training scores. The same CV folds also guide model selection, so local performance estimates may be optimistic. Nested validation and separate preprocessing ablations would strengthen the evaluation. This is an educational classification project, not a clinically validated decision system.
+
+## Authors
+
+- Andreas Caeyman
+- Andrea Munno
+- Lorenzo Redighieri
+
+Developed for **Machine Learning (CS-433), EPFL — Project 1**.
+
+## Data source
+
+[CDC — 2015 BRFSS Survey Data and Documentation](https://www.cdc.gov/brfss/annual_data/annual_2015.html). Experiments use the course-provided subset and split.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
